@@ -1,0 +1,17 @@
+{
+  "name": "importer",
+  "version": "1.0.0",
+  "description": "import github repo and extract references to other projects",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "format": "prandard 'src/**/*.js'"
+  },
+  "author": "Paul Sonnentag <Paul.Sonnentag@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "fs-extra": "^4.0.2",
+    "prandard": "^1.0.1",
+    "simple-git": "^1.84.0"
+  }
+}
