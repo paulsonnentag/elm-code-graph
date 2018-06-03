@@ -1,42 +1,100 @@
 const _ = require('lodash/fp')
-const MongoClient = require('mongodb').MongoClient
 const {importRepo, ImporterError} = require('./importer')
+const fs = require('fs-extra')
 
-const DB_URL = 'mongodb://localhost:27017/elm'
+const neo4j = require('neo4j-driver').v1
 
-async function run () {
+const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'password'))
+const session = driver.session()
 
+;(async () => {
   try {
-    const db = await MongoClient.connect(DB_URL)
-    const col = await db.collection('references')
 
-    console.log('start import')
-
-    const {references, hash} = await importRepo({
+    await loadRepo({
       rootDir: '_repos',
       user: 'rtfeldman',
       repoName: 'elm-spa-example'
     })
 
-    console.log('find and remove', { commit: hash })
-
-    // clear previous values
-    await col.deleteMany({ commit: hash })
-
-    // insert new references
-    await col.insertMany(references)
-
-    console.log(`imported ${references.length} reference(s)`)
-
-    db.close()
+    await session.close()
 
   } catch (err) {
     if (err instanceof ImporterError) {
-      console.log('Importer Error:', err.message)
+      console.error('Importer Error:', err.message)
     } else {
-      throw err
+      console.error('Unexpected Error:', err)
     }
   }
+})()
+
+async function loadRepo ({rootDir, user, repoName}) {
+  console.log(`${user}/${repoName} start import`)
+
+  const references = await importRepo({rootDir, user, repoName})
+
+  await fs.writeFile(`_references/${user}_${repoName}.json`, JSON.stringify(references, null, 2))
+
+  await addReferencesToGraph(references)
+
+  console.log(`${user}/${repoName} successfully imported ${references.length} reference(s)`)
 }
 
-run()
+async function addReferencesToGraph (references) {
+
+  // ensure referenced projects, modules and symbols exist
+  await Promise.all(_.flow(
+    _.flatMap(({referer, referred, symbol}) => [
+      {project: referer.project, module: referer.module, symbol: []},
+      {project: referred.project, module: referred.module, symbol: [symbol]},
+    ]),
+    _.groupBy(({project}) => project),
+    _.entries,
+    _.map(async ([project, references]) => {
+
+      const res = await session.run(`
+          MERGE (project:Project { id: $project })          
+        `, {project})
+
+      await Promise.all(_.flow(
+        _.groupBy(({module}) => module),
+        _.entries,
+        _.map(async ([module, references]) => {
+          await session.run(`
+              MATCH 
+                (project:Project { id: $project}) 
+              MERGE 
+                (project)-[:HAS_MODULE]->(module:Module { id: $project + "/" + $module, name: $module })
+            `, {project, module})
+
+          await Promise.all(_.flow(
+            _.flatMap(({symbol}) => symbol),
+            _.uniq,
+            _.map(async symbol => {
+              await session.run(`
+                  MATCH 
+                    (module:Module { id: $project + "/" + $module })
+                  MERGE 
+                    (module)-[:HAS_SYMBOL]->(symbol:Symbol { id: $project + "/" + $module + "." + $symbol, name: $symbol })
+                `, {project, module, symbol})
+            })
+          )(references))
+        }),
+      )(references))
+    })
+  )(references))
+
+  // create reference edges
+  await Promise.all(_.map(async ({referer, referred, symbol, url}) => {
+    await session.run(`
+        MATCH 
+          (module:Module { id: $module }),
+          (symbol:Symbol { id: $symbol }) 
+        MERGE 
+          (module)-[:REFERENCES { url: $url }]->(symbol)
+      `, {
+      symbol: `${referred.project}/${referred.module}.${symbol}`,
+      module: `${referer.project}/${referer.module}`,
+      url: url
+    })
+  }, references))
+}

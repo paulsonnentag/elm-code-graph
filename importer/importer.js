@@ -22,34 +22,44 @@ const MAIN_FILE_REGEX =
   )
 
 async function importRepo(context) {
-  const { rootDir, user, repoName } = context
+  const { user, repoName } = context
 
   const repo = await fetchRepo(context)
   const latestCommit = await getLatestCommit(repo)
-  const package = await getPackage(context)
-
   const dependencies = await resolveDependencies(context)
 
-  /*
-  console.log('latest commit:', latestCommit)
-  console.log('package:', package)
-  console.log('dependencies:', dependencies)
-  */
+  return await Promise.all(_.map(
+    async reference => {
+      const filePath = !reference.file.startsWith('/') ? '/' + reference.file : path.join(__dirname, '_repos', user, repoName, reference.file)
+      const module = await getModuleOfFile(filePath)
 
-  const references = _.map(
-    reference => {
+      const startLine = reference.region.start.line
+      const endLine = reference.region.end.line
+      const lineSelector = startLine === endLine ? `L${startLine}` : `L${startLine}:${endLine}`;
+      const url = `https://github.com/${user}/${repoName}/blob/${latestCommit.hash}${reference.file}#${lineSelector}`;
+
       return Object.assign(reference, {
+        referer: {
+          project: `${user}/${repoName}`,
+          module,
+        },
+
+        referred: {
+          project: `${reference.user}/${reference.project}`,
+          module: reference.module
+        },
+
+        symbol: reference.symbol,
+
+        url,
+
+        region: reference.region,
+
         version: dependencies[`${reference.user}/${reference.project}`],
-        commit: latestCommit.hash
       })
     },
     await getReferences(context)
-  )
-
-  return {
-    hash: latestCommit.hash,
-    references
-  }
+  ));
 }
 
 async function fetchRepo({ user, repoName, rootDir }) {
@@ -80,7 +90,7 @@ async function getPackage({ user, repoName, rootDir }) {
     package = await fs.readJson(path.join(workingDir, 'elm-package.json'))
   } catch (err) {
     if (err.code == 'ENOENT') {
-      throw new ImporterError(`repository doens't have "elm-package.json"`)
+      throw new ImporterError(`repository doesn't have "elm-package.json"`)
     }
 
     throw err
@@ -116,6 +126,19 @@ async function resolveDependencies({ user, repoName, rootDir }) {
   return await fs.readJson(path.join(workingDir, 'elm-stuff/exact-dependencies.json'))
 }
 
+const MODULE_NAME_REGEX = /module ([\w\.]+)/
+const getModuleOfFile = _.memoize(async path => {
+  const file = await fs.readFile(path, 'utf-8')
+  const match = file.match(MODULE_NAME_REGEX)
+
+  if (!match) {
+    console.warn('Couldn\'t get module of file: ', path)
+    return null;
+  }
+
+  return match[1];
+})
+
 async function getReferences({ user, repoName, rootDir }) {
   const workingDir = getWorkingDir({ user, repoName, rootDir })
   const paths = await glob(path.join(workingDir, '**/*.elm'))
@@ -132,13 +155,20 @@ async function getReferences({ user, repoName, rootDir }) {
   await fs.emptyDir(path.join(workingDir, 'elm-stuff/build-artifacts'))
 
   while (!_.isEmpty(queue)) {
-    let current = _.first(queue)
+    let currentFileName = _.first(queue)
 
-    let newReferences = await compileFile(workingDir, _.first(queue))
-    let resolvedFiles = _.reduce((map, { file }) => Object.assign(map, { [file]: true }), {}, newReferences)
+    let resolvedFiles = { [currentFileName]: true };
 
-    references = references.concat(newReferences)
-    queue = queue.filter(file => !resolvedFiles[file] && file !== current)
+    try {
+      let newReferences = await compileFile(workingDir, _.first(queue))
+      resolvedFiles = _.reduce((map, { file }) => Object.assign(map, { [file]: true }), resolvedFiles, newReferences)
+      references = references.concat(newReferences)
+
+    } catch (e) {
+      console.warn(`failed to compile ${currentFileName}`)
+    }
+
+    queue = queue.filter(file => !resolvedFiles[file])
   }
 
   return references
@@ -147,7 +177,6 @@ async function getReferences({ user, repoName, rootDir }) {
 async function compileFile(workingDir, file) {
   const filePath = path.join(workingDir, file)
   const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${filePath}`)).split('\n')
-
   const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical \{_package = Name \{_user = "(.*)", _project = "(.*)"}, _module = "(.*)"}/m
 
   const log =
