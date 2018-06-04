@@ -22,6 +22,9 @@ async function importRepo (context) {
   const repo = await fetchRepo(context)
   const latestCommit = await getLatestCommit(repo)
   const dependencies = await resolveDependencies(context)
+  const pckg = await getPackage(context)
+
+  dependencies[`${owner}/${name}`] = pckg.version
 
   return Promise.all(
     _.map(async reference => {
@@ -31,6 +34,7 @@ async function importRepo (context) {
       const [, fileRepoPath] = filePath.split(REPO_DIR)
       const refererModule = await getModuleOfFile(filePath)
       const version = dependencies[`${reference.user}/${reference.project}`]
+
       const referredFile = await getFileOfModule({
         baseRepo: {owner, name},
         subRepo: {
@@ -45,7 +49,7 @@ async function importRepo (context) {
       const startLine = reference.region.start.line
       const endLine = reference.region.end.line
       const lineSelector = startLine === endLine ? `L${startLine}` : `L${startLine}:${endLine}`
-      const url = `https://github.com/${owner}/${name}/blob/${latestCommit.hash}${reference.file}#${
+      const url = `https://github.com/${owner === 'elm-lang' ? 'elm' : owner}/${name}/blob/${latestCommit.hash}${reference.file}#${
         lineSelector
       }`
 
@@ -89,8 +93,8 @@ async function fetchRepo ({owner, name}) {
 
 const VERSION_REGEX = /^([0-9]+\.[0-9]+\.[0-9]+) <= v < ([0-9]+\.[0-9]+\.[0-9]+)$/
 
-async function getPackage ({owner, name, rootDir}) {
-  const workingDir = getWorkingDir({owner, name, rootDir})
+async function getPackage ({owner, name}) {
+  const workingDir = getWorkingDir({owner, name})
 
   let pckg
 
@@ -156,9 +160,16 @@ const getModuleOfFile = _.memoize(async path => {
 })
 
 async function getFileOfModule ({baseRepo, subRepo, rootDir}) {
+  let repoPath
   const basePath = path.join(rootDir, baseRepo.owner, baseRepo.name)
-  const subPath = path.join('elm-stuff/packages', subRepo.owner, subRepo.name, subRepo.version)
-  const repoPath = path.join(__dirname, basePath, subPath)
+
+  if (baseRepo.owner === subRepo.owner && baseRepo.name === subRepo.name) {
+    repoPath = basePath
+  } else {
+    const subPath = path.join('elm-stuff/packages', subRepo.owner, subRepo.name, subRepo.version)
+    repoPath = path.join(__dirname, basePath, subPath)
+  }
+
   const pckg = await fs.readJson(path.join(repoPath, 'elm-package.json'))
 
   const srcDirs = pckg['source-directories']
@@ -207,7 +218,11 @@ async function getReferences ({owner, name, rootDir}) {
       console.log(`compile ${currentFileName}: success`)
     } catch (e) {
       console.warn(`compile ${currentFileName}: failed`)
-      console.log(`\n${e}\n`)
+      if (currentFileName.startsWith('/tests/') || currentFileName.startsWith('/test/')) {
+        console.log('fine is test')
+      } else {
+        console.log(`\n${e}\n`)
+      }
     }
 
     queue = queue.filter(file => !resolvedFiles[file])
