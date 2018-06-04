@@ -8,25 +8,31 @@ const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'passw
 const session = driver.session()
 
 const PAGE_SIZE = 10
-
 ;(async () => {
   try {
     let currentPage = 1
+    let totalResults = Infinity
+
+    await createConstraints()
 
     do {
-      const response = await axios.get(`https://api.github.com/search/repositories?q=language:elm&per_page=${PAGE_SIZE}&page=${currentPage}`)
+      const response = await axios.get(
+        `https://api.github.com/search/repositories?q=language:elm&per_page=${PAGE_SIZE}&page=${
+          currentPage
+        }`
+      )
       const repos = response.data.items
 
       totalResults = response.data.total_count
       currentPage++
 
       for (let i = 0; i < repos.length; i++) {
-        const repo = repos[i];
+        const repo = repos[i]
 
         try {
           await loadRepo({
             stars: repo.stargazers_count,
-            owner: repo.owner.login,
+            owner: repo.owner.login === 'elm' ? 'elm-lang' : repo.owner.login,
             name: repo.name,
             lastUpdated: repo.updated_at,
             license: repo.license.key
@@ -35,28 +41,35 @@ const PAGE_SIZE = 10
           console.error('Failed import, Unexpected Error:', err)
         }
       }
-    } while (((currentPage - 1) * PAGE_SIZE) < totalResults)
-
+    } while ((currentPage - 1) * PAGE_SIZE < totalResults)
   } catch (err) {
     console.error(err)
   }
 
-  process.exit();
-
+  process.exit()
 })()
 
+async function createConstraints () {
+  await session.run('CREATE CONSTRAINT ON (repo:Repo) ASSERT repo.id IS UNIQUE')
+  await session.run('CREATE CONSTRAINT ON (repo:Repo) ASSERT exists(repo.id)')
+  await session.run('CREATE CONSTRAINT ON (file:File) ASSERT file.id IS UNIQUE')
+  await session.run('CREATE CONSTRAINT ON (file:File) ASSERT exists(file.id)')
+  await session.run('CREATE CONSTRAINT ON (symbol:Symbol) ASSERT symbol.id IS UNIQUE')
+  await session.run('CREATE CONSTRAINT ON (symbol:Symbol) ASSERT exists(symbol.id)')
+}
+
 async function loadRepo (repo) {
-  const {owner, stars, lastUpdated, license, name} = repo
+  const {owner, name} = repo
   const timestamp = Date.now()
   console.log(`${owner}/${name} start import`)
 
   let references = []
 
   try {
-    await importRepo({owner, name})
+    references = await importRepo({owner, name})
   } catch (err) {
     if (err instanceof ImporterError) {
-      console.error('Importer Error:', err.message)
+      console.error('Importer Error:', err)
     } else {
       throw err
     }
@@ -70,84 +83,125 @@ async function loadRepo (repo) {
 
   const duration = Math.round((Date.now() - timestamp) / 1000)
 
-  console.log(`${owner}/${name} successfully imported ${references.length} reference(s) in ${duration} second(s)`)
+  console.log(
+    `${owner}/${name} successfully imported ${references.length} reference(s) in ${
+      duration
+    } second(s)`
+  )
 }
 
 async function addRepoMetaDataToGraph ({owner, stars, lastUpdated, license, name}) {
-  await session.run(`
+  await session.run(
+    `
     MERGE
-      (project:Project {id: $project})
+      (repo:Repo {id: $repo})
     ON MATCH SET
-      p.lastUpdated = $lastUpdated,
-      p.license = $license,
-      p.starts = $stars
+      repo.lastUpdated = $lastUpdated,
+      repo.license = $license,
+      repo.stars = $stars
     ON CREATE SET
-      p.lastUpdated = $lastUpdated,
-      p.license = $license,
-      p.starts = $stars
-  `, {
-    project: `${owner}/${name}`,
-    lastUpdated,
-    license,
-    stars
-  })
+      repo.lastUpdated = $lastUpdated,
+      repo.license = $license,
+      repo.stars = $stars
+  `,
+    {
+      repo: `${owner}/${name}`,
+      lastUpdated,
+      license,
+      stars
+    }
+  )
 }
 
 async function addReferencesToGraph (references) {
   // ensure referenced projects, modules and symbols exist
-  await Promise.all(_.flow(
-    _.flatMap(({referer, referred, symbol}) => [
-      {project: referer.project, module: referer.module, symbol: []},
-      {project: referred.project, module: referred.module, symbol: [symbol]},
-    ]),
-    _.groupBy(({project}) => project),
-    _.entries,
-    _.map(async ([project, references]) => {
+  await Promise.all(
+    _.flow(
+      _.flatMap(({referer, referred, symbol}) => [
+        {repo: referer.repo, module: referer.module, file: referer.file, symbol: []},
+        {repo: referred.repo, module: referred.module, file: referred.file, symbol: [symbol]}
+      ]),
+      _.groupBy(({repo}) => repo),
+      _.entries,
+      _.map(async ([repo, references]) => {
+        // create repo
+        await session.run(
+          `
+        MERGE (repo:Repo { id: $repo })          
+      `,
+          {repo}
+        )
 
-      const res = await session.run(`
-          MERGE (project:Project { id: $project })          
-        `, {project})
+        await Promise.all(
+          _.flow(
+            _.groupBy(({file}) => file),
+            _.entries,
+            _.map(async ([file, references]) => {
+              const module = references[0].module
 
-      await Promise.all(_.flow(
-        _.groupBy(({module}) => module),
-        _.entries,
-        _.map(async ([module, references]) => {
-          await session.run(`
-              MATCH 
-                (project:Project { id: $project}) 
-              MERGE 
-                (project)-[:HAS_MODULE]->(module:Module { id: $project + "/" + $module, name: $module })
-            `, {project, module})
+              // create files of repo
+              await session.run(
+                `
+            MATCH 
+              (repo:Repo { id: $repo }) 
+            MERGE 
+              (repo)-[:HAS_FILE]->(file:File { id: $file, module: $repo + "/" + $module, name: $name  })
+          `,
+                {
+                  repo,
+                  file,
+                  module,
+                  name: file.slice(repo.length)
+                }
+              )
 
-          await Promise.all(_.flow(
-            _.flatMap(({symbol}) => symbol),
-            _.uniq,
-            _.map(async symbol => {
-              await session.run(`
-                  MATCH 
-                    (module:Module { id: $project + "/" + $module })
-                  MERGE 
-                    (module)-[:HAS_SYMBOL]->(symbol:Symbol { id: $project + "/" + $module + "." + $symbol, name: $symbol })
-                `, {project, module, symbol})
+              await Promise.all(
+                _.flow(
+                  _.flatMap(({symbol}) => symbol),
+                  _.uniq,
+                  _.map(async symbol => {
+                    // create symbols of file
+                    await session.run(
+                      `
+                MATCH 
+                  (file:File { id: $file })
+                MERGE 
+                  (file)-[:DEFINES_SYMBOL]->(symbol:Symbol { id: $id, name: $symbol })
+              `,
+                      {
+                        file,
+                        symbol,
+                        id: `${file.slice(0, -4)}.${symbol}`
+                      }
+                    )
+                  })
+                )(references)
+              )
             })
-          )(references))
-        }),
-      )(references))
-    })
-  )(references))
+          )(references)
+        )
+      })
+    )(references)
+  )
 
   // create reference edges
-  await Promise.all(_.map(async ({referer, referred, symbol, url}) => {
-    await session.run(`
+  await Promise.all(
+    _.map(async ({referer, referred, symbol, url, version}) => {
+      await session.run(
+        `
         MATCH 
-          (module:Module { id: $module }),
-          (symbol:Symbol { id: $symbol }) 
+          (file:File { id: $fileId }),
+          (symbol:Symbol { id: $symbolId }) 
         MERGE 
-          (module)-[:REFERENCES { url: $url }]->(symbol)
-      `, {
-      symbol: `${referred.project}/${referred.module}.${symbol}`,
-      module: `${referer.project}/${referer.module}`,
-      url: url
-    })
-  }, references))
+          (file)-[:REFERENCES_SYMBOL { url: $url, version: $version }]->(symbol)
+      `,
+        {
+          symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
+          fileId: referer.file,
+          url,
+          version
+        }
+      )
+    }, references)
+  )
 }

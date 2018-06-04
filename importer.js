@@ -9,17 +9,10 @@ const compareVersions = require('compare-versions')
 
 const ELM_VERSION = '0.18.0'
 
-const MAIN_FILE_REGEX =
-  new RegExp(
-    _.map(file => `(${file}$)`, [
-      'main.elm',
-      'index.elm',
-      'app.elm',
-    ])
-      .join('|')
-    ,
-    'gi'
-  )
+const MAIN_FILE_REGEX = new RegExp(
+  _.map(file => `(${file}$)`, ['main.elm', 'index.elm', 'app.elm']).join('|'),
+  'gi'
+)
 
 const REPO_DIR = '_repos'
 
@@ -30,38 +23,52 @@ async function importRepo (context) {
   const latestCommit = await getLatestCommit(repo)
   const dependencies = await resolveDependencies(context)
 
-  return await Promise.all(_.map(
-    async reference => {
-      const filePath = !reference.file.startsWith('/') ? '/' + reference.file : path.join(__dirname, REPO_DIR, owner, name, reference.file)
-      const module = await getModuleOfFile(filePath)
+  return Promise.all(
+    _.map(async reference => {
+      const filePath = !reference.file.startsWith('/')
+        ? '/' + reference.file
+        : path.join(__dirname, REPO_DIR, owner, name, reference.file)
+      const [, fileRepoPath] = filePath.split(REPO_DIR)
+      const refererModule = await getModuleOfFile(filePath)
+      const version = dependencies[`${reference.user}/${reference.project}`]
+      const referredFile = await getFileOfModule({
+        baseRepo: {owner, name},
+        subRepo: {
+          version,
+          owner: reference.user,
+          name: reference.project,
+          module: reference.module
+        },
+        rootDir: REPO_DIR
+      })
 
       const startLine = reference.region.start.line
       const endLine = reference.region.end.line
       const lineSelector = startLine === endLine ? `L${startLine}` : `L${startLine}:${endLine}`
-      const url = `https://github.com/${owner}/${name}/blob/${latestCommit.hash}${reference.file}#${lineSelector}`
+      const url = `https://github.com/${owner}/${name}/blob/${latestCommit.hash}${reference.file}#${
+        lineSelector
+      }`
 
-      return Object.assign(reference, {
+      return {
+        symbol: reference.symbol,
+        region: reference.region,
+        url,
+        version,
+
         referer: {
-          project: `${owner}/${name}`,
-          module,
+          repo: `${owner}/${name}`,
+          file: fileRepoPath.slice(1),
+          module: refererModule
         },
 
         referred: {
-          project: `${reference.user}/${reference.project}`,
+          repo: `${reference.user}/${reference.project}`,
+          file: referredFile,
           module: reference.module
-        },
-
-        symbol: reference.symbol,
-
-        url,
-
-        region: reference.region,
-
-        version: dependencies[`${reference.user}/${reference.project}`],
-      })
-    },
-    await getReferences(context)
-  ))
+        }
+      }
+    }, await getReferences(context))
+  )
 }
 
 async function fetchRepo ({owner, name}) {
@@ -71,7 +78,6 @@ async function fetchRepo ({owner, name}) {
   if (await fs.pathExists(path.join(workingDir, '.git'))) {
     repo = git(workingDir)
     await repo.pull()
-
   } else {
     await fs.ensureDir(workingDir)
     repo = git(workingDir)
@@ -86,15 +92,15 @@ const VERSION_REGEX = /^([0-9]+\.[0-9]+\.[0-9]+) <= v < ([0-9]+\.[0-9]+\.[0-9]+)
 async function getPackage ({owner, name, rootDir}) {
   const workingDir = getWorkingDir({owner, name, rootDir})
 
-  let package
+  let pckg
 
   try {
-    package = await fs.readJson(path.join(workingDir, 'elm-package.json'))
+    pckg = await fs.readJson(path.join(workingDir, 'elm-package.json'))
   } catch (err) {
     try {
-      package = await fs.readJson(path.join(workingDir, 'elm.json'))
+      pckg = await fs.readJson(path.join(workingDir, 'elm.json'))
     } catch (err) {
-      if (err.code == 'ENOENT') {
+      if (err.code === 'ENOENT') {
         throw new ImporterError(`repository doesn't have "elm-package.json"`)
       }
 
@@ -102,7 +108,7 @@ async function getPackage ({owner, name, rootDir}) {
     }
   }
 
-  const version = package['elm-version']
+  const version = pckg['elm-version']
   const match = version.match(VERSION_REGEX)
 
   if (!match) {
@@ -112,11 +118,16 @@ async function getPackage ({owner, name, rootDir}) {
   const [, minVersion, maxVersion] = match
 
   // compareVersion: a < b => -1; a == b => 0; a > b => 1
-  if (compareVersions(ELM_VERSION, minVersion) == -1 || compareVersions(ELM_VERSION, maxVersion) >= 0) {
-    throw new ImporterError(`current version "${ELM_VERSION}" doesn't match required version "${version}"`)
+  if (
+    compareVersions(ELM_VERSION, minVersion) === -1 ||
+    compareVersions(ELM_VERSION, maxVersion) >= 0
+  ) {
+    throw new ImporterError(
+      `current version "${ELM_VERSION}" doesn't match required version "${version}"`
+    )
   }
 
-  return package
+  return pckg
 }
 
 async function getLatestCommit (repo) {
@@ -129,21 +140,40 @@ async function resolveDependencies ({owner, name, rootDir}) {
   // install packages
   await execWithDefaultErrorHandler(`lib/install.sh ${workingDir}`)
 
-  return await fs.readJson(path.join(workingDir, 'elm-stuff/exact-dependencies.json'))
+  return fs.readJson(path.join(workingDir, 'elm-stuff/exact-dependencies.json'))
 }
 
-const MODULE_NAME_REGEX = /module ([\w\.]+)/
+const MODULE_NAME_REGEX = /module ([\w.]+)/
 const getModuleOfFile = _.memoize(async path => {
   const file = await fs.readFile(path, 'utf-8')
   const match = file.match(MODULE_NAME_REGEX)
 
   if (!match) {
-    console.warn('Couldn\'t get module of file: ', path)
     return null
   }
 
   return match[1]
 })
+
+async function getFileOfModule ({baseRepo, subRepo, rootDir}) {
+  const basePath = path.join(rootDir, baseRepo.owner, baseRepo.name)
+  const subPath = path.join('elm-stuff/packages', subRepo.owner, subRepo.name, subRepo.version)
+  const repoPath = path.join(__dirname, basePath, subPath)
+  const pckg = await fs.readJson(path.join(repoPath, 'elm-package.json'))
+
+  const srcDirs = pckg['source-directories']
+
+  const modulePath = `${subRepo.module.split('.').join('/')}.elm`
+
+  for (let i = 0; i < srcDirs.length; i++) {
+    const pathCandidate = path.join(repoPath, srcDirs[i], modulePath)
+    if (await fs.pathExists(pathCandidate)) {
+      return path.join(subRepo.owner, subRepo.name, srcDirs[i], modulePath)
+    }
+  }
+
+  throw new ImporterError(`Couldn't find file of module ${modulePath}`)
+}
 
 async function getReferences ({owner, name, rootDir}) {
   const workingDir = getWorkingDir({owner, name, rootDir})
@@ -167,15 +197,17 @@ async function getReferences ({owner, name, rootDir}) {
 
     try {
       let newReferences = await compileFile(workingDir, _.first(queue))
-      resolvedFiles = _.reduce((map, {file}) => Object.assign(map, {[file]: true}), resolvedFiles, newReferences)
+      resolvedFiles = _.reduce(
+        (map, {file}) => Object.assign(map, {[file]: true}),
+        resolvedFiles,
+        newReferences
+      )
       references = references.concat(newReferences)
 
       console.log(`compile ${currentFileName}: success`)
-
     } catch (e) {
-      console.log(e);
-
       console.warn(`compile ${currentFileName}: failed`)
+      console.log(`\n${e}\n`)
     }
 
     queue = queue.filter(file => !resolvedFiles[file])
@@ -186,13 +218,17 @@ async function getReferences ({owner, name, rootDir}) {
 
 async function compileFile (workingDir, file) {
   const filePath = path.join(workingDir, file)
-  const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${filePath}`)).split('\n')
-  const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical \{_package = Name \{_user = "(.*)", _project = "(.*)"}, _module = "(.*)"}/m
+  const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${filePath}`)).split(
+    '\n'
+  )
+  const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical {_package = Name {_user = "(.*)", _project = "(.*)"}, _module = "(.*)"}/m
 
   return _.flow(
     _.flatMap(line => {
       let obj = []
-      try { obj = JSON.parse(line) } catch (e) { }
+      try {
+        obj = JSON.parse(line)
+      } catch (e) {}
       return obj
     }),
     _.map(message => {
@@ -216,10 +252,12 @@ async function compileFile (workingDir, file) {
       }
 
       return {
-        user, project, module,
+        user,
+        project,
+        module,
         symbol: symbol,
         region: message.region,
-        file: message.file.slice(1),
+        file: message.file.slice(1)
       }
     }),
     _.compact
