@@ -10,8 +10,8 @@
   "author": "Paul Sonnentag <Paul.Sonnentag@gmail.com>",
   "license": "MIT",
   "dependencies": {
+    "axios": "^0.18.0",
     "compare-versions": "^3.1.0",
-    "debug": "^3.1.0",
     "fs-extra": "^4.0.2",
     "glob": "^7.1.2",
     "lodash": "^4.17.4",
