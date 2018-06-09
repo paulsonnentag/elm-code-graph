@@ -7,5 +7,5 @@ if [ "$#" != 2 ]
 fi
 
 cd $1
-../../../lib/elm-make --yes --report=json --warn $2
+~/repos/elm-code-crawler/lib/elm-make --yes --report=json --warn $2
 cd ../../..

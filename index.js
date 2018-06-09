@@ -13,6 +13,20 @@ const PAGE_SIZE = 10
     let currentPage = 1
     let totalResults = Infinity
 
+    try {
+      await loadRepo({
+        stars: 10,
+        owner: 'wende',
+        name: 'elchemy',
+        lastUpdated: 'timestamp',
+        license: 'mit'
+      })
+    } catch (err) {
+      console.error('Failed import, Unexpected Error:', err)
+    }
+
+    process.exit()
+
     await createConstraints()
 
     do {
@@ -145,7 +159,7 @@ async function addReferencesToGraph (references) {
             MATCH 
               (repo:Repo { id: $repo }) 
             MERGE 
-              (repo)-[:HAS_FILE]->(file:File { id: $file, module: $repo + "/" + $module, name: $name  })
+              (repo)-[:HAS_FILE]->(file:File { id: $file, ${module ? ' module: $repo + "/" + $module' : ''}, name: $name  })
           `,
                 {
                   repo,
@@ -187,20 +201,19 @@ async function addReferencesToGraph (references) {
   // create reference edges
   await Promise.all(
     _.map(async ({referer, referred, symbol, url, version}) => {
-      await session.run(
-        `
+      await session.run(`
         MATCH 
           (file:File { id: $fileId }),
           (symbol:Symbol { id: $symbolId }) 
         MERGE 
-          (file)-[:REFERENCES_SYMBOL { url: $url, version: $version }]->(symbol)
+          (file)-[:REFERENCES_SYMBOL { url: $url ${version ? ', version: $version' : ''} }]->(symbol)
       `,
-        {
-          symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
-          fileId: referer.file,
-          url,
-          version
-        }
+      {
+        symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
+        fileId: referer.file,
+        url,
+        version: version || null
+      }
       )
     }, references)
   )

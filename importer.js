@@ -21,57 +21,39 @@ async function importRepo (context) {
 
   const repo = await fetchRepo(context)
   const latestCommit = await getLatestCommit(repo)
-  const dependencies = await resolveDependencies(context)
-  const pckg = await getPackage(context)
 
-  dependencies[`${owner}/${name}`] = pckg.version
+  const rawReferences = await getAllReferences(context)
 
   return Promise.all(
     _.map(async reference => {
-      const filePath = !reference.file.startsWith('/')
-        ? '/' + reference.file
-        : path.join(__dirname, REPO_DIR, owner, name, reference.file)
-      const [, fileRepoPath] = filePath.split(REPO_DIR)
-      const refererModule = await getModuleOfFile(filePath)
-      const version = dependencies[`${reference.user}/${reference.project}`]
-
-      const referredFile = await getFileOfModule({
-        baseRepo: {owner, name},
-        subRepo: {
-          version,
-          owner: reference.user,
-          name: reference.project,
-          module: reference.module
-        },
-        rootDir: REPO_DIR
-      })
+      const fileAbsPath = reference.file.split(REPO_DIR)[1].slice(1)
+      const fileRelPath = reference.file.split(`${owner}/${name}`)[1].slice(1)
+      const refererModule = await getModuleOfFile(reference.file)
 
       const startLine = reference.region.start.line
       const endLine = reference.region.end.line
       const lineSelector = startLine === endLine ? `L${startLine}` : `L${startLine}:${endLine}`
-      const url = `https://github.com/${owner === 'elm-lang' ? 'elm' : owner}/${name}/blob/${latestCommit.hash}${reference.file}#${
-        lineSelector
-      }`
+      const normalizedOwner = owner === 'elm-lang' ? 'elm' : owner // Fix because elm repo is listed as elm-lang in dependencies
+      const url = `https://github.com/${normalizedOwner}/${name}/blob/${latestCommit.hash}${fileRelPath}#${lineSelector}`
 
       return {
         symbol: reference.symbol,
         region: reference.region,
         url,
-        version,
-
+        version: reference.version,
         referer: {
           repo: `${owner}/${name}`,
-          file: fileRepoPath.slice(1),
+          file: fileAbsPath,
           module: refererModule
         },
 
         referred: {
           repo: `${reference.user}/${reference.project}`,
-          file: referredFile,
+          file: reference.moduleFile,
           module: reference.module
         }
       }
-    }, await getReferences(context))
+    }, rawReferences)
   )
 }
 
@@ -93,9 +75,7 @@ async function fetchRepo ({owner, name}) {
 
 const VERSION_REGEX = /^([0-9]+\.[0-9]+\.[0-9]+) <= v < ([0-9]+\.[0-9]+\.[0-9]+)$/
 
-async function getPackage ({owner, name}) {
-  const workingDir = getWorkingDir({owner, name})
-
+async function getPackage (workingDir) {
   let pckg
 
   try {
@@ -138,9 +118,7 @@ async function getLatestCommit (repo) {
   return (await repo.log()).latest
 }
 
-async function resolveDependencies ({owner, name, rootDir}) {
-  const workingDir = getWorkingDir({owner, name, rootDir})
-
+async function resolveDependencies (workingDir) {
   // install packages
   await execWithDefaultErrorHandler(`lib/install.sh ${workingDir}`)
 
@@ -149,7 +127,14 @@ async function resolveDependencies ({owner, name, rootDir}) {
 
 const MODULE_NAME_REGEX = /module ([\w.]+)/
 const getModuleOfFile = _.memoize(async path => {
-  const file = await fs.readFile(path, 'utf-8')
+  let file
+
+  try {
+    file = await fs.readFile(path, 'utf-8')
+  } catch (err) {
+    throw new ImporterError(`Can't extract module because of invalid path: ${path}`)
+  }
+
   const match = file.match(MODULE_NAME_REGEX)
 
   if (!match) {
@@ -159,40 +144,54 @@ const getModuleOfFile = _.memoize(async path => {
   return match[1]
 })
 
-async function getFileOfModule ({baseRepo, subRepo, rootDir}) {
+async function getFileOfModule ({workingDir, owner, name, module, version}) {
   let repoPath
-  const basePath = path.join(rootDir, baseRepo.owner, baseRepo.name)
 
-  if (baseRepo.owner === subRepo.owner && baseRepo.name === subRepo.name) {
-    repoPath = basePath
+  if (!version) { // local reference
+    repoPath = workingDir
   } else {
-    const subPath = path.join('elm-stuff/packages', subRepo.owner, subRepo.name, subRepo.version)
-    repoPath = path.join(__dirname, basePath, subPath)
+    repoPath = path.join(workingDir, 'elm-stuff/packages', owner, name, version)
   }
 
   const pckg = await fs.readJson(path.join(repoPath, 'elm-package.json'))
-
   const srcDirs = pckg['source-directories']
 
-  const modulePath = `${subRepo.module.split('.').join('/')}.elm`
+  const modulePath = `${module.split('.').join('/')}.elm`
+
+  const pathCandidates = []
 
   for (let i = 0; i < srcDirs.length; i++) {
     const pathCandidate = path.join(repoPath, srcDirs[i], modulePath)
+    pathCandidates.push(pathCandidate)
     if (await fs.pathExists(pathCandidate)) {
-      return path.join(subRepo.owner, subRepo.name, srcDirs[i], modulePath)
+      return path.join(owner, name, srcDirs[i], modulePath)
     }
+  }
+
+  if (module === 'Main') {
+    console.log(`Couldn't find file of module Main: ${modulePath},  fine is self reference`)
+    return
   }
 
   throw new ImporterError(`Couldn't find file of module ${modulePath}`)
 }
 
-async function getReferences ({owner, name, rootDir}) {
-  const workingDir = getWorkingDir({owner, name, rootDir})
-  const paths = await glob(path.join(workingDir, '**/*.elm'))
-  const files = _.flow(
-    _.map(path => _.drop(workingDir.length, path).join('')),
-    _.reject(_.startsWith('/elm-stuff'))
-  )(paths)
+async function getAllReferences ({owner, name}) {
+  const elmPackages = await getElmPackages({owner, name})
+
+  return _.flow(
+    _.map(({root, files}) => getReferences({workingDir: root, files, owner, name})),
+    _.thru(references => Promise.all(references)),
+    _.thru(async references => _.flatten(await references))
+  )(elmPackages)
+}
+
+async function getReferences ({owner, name, workingDir, files}) {
+  const pckg = await getPackage(workingDir)
+
+  const dependencies = await resolveDependencies(workingDir)
+  dependencies[`${owner}/${pckg.name}`] = pckg.version
+
   const [mainFiles, regularFiles] = _.partition(file => MAIN_FILE_REGEX.test(file), files)
 
   let queue = mainFiles.concat(regularFiles)
@@ -228,12 +227,73 @@ async function getReferences ({owner, name, rootDir}) {
     queue = queue.filter(file => !resolvedFiles[file])
   }
 
-  return references
+  return _.flow(
+    _.map(async reference => {
+      const moduleFile =
+        await getFileOfModule({
+          workingDir,
+          owner: reference.user,
+          name: reference.project,
+          module: reference.module,
+          version: dependencies[`${reference.user}/${reference.project}`]
+        })
+
+      if (!moduleFile) {
+        return []
+      }
+
+      return [{
+        ...reference,
+        moduleFile,
+        file: !reference.file.startsWith('/') ? `/${reference.file}` : path.join(workingDir, reference.file)
+      }]
+    }),
+    _.thru(refs => Promise.all(refs)),
+    _.thru(async refs => _.flatten(await refs))
+  )(references)
+}
+
+async function getElmPackages ({owner, name}) {
+  // get folders which have elm-package.json
+  const roots =
+    _.flow(
+      _.filter(path => path.indexOf('/elm-stuff/') === -1),
+      _.sortBy(path => -path.length),
+      _.map(path => path.slice(0, -('/elm-package.json'.length)))
+    )(await glob(path.join(__dirname, REPO_DIR, owner, name, '**/elm-package.json')))
+
+  // get elm files
+  const files = await glob(path.join(__dirname, REPO_DIR, owner, name, '**/*.elm'))
+
+  // group files by root to which they belong
+  const elmPackages = _.flow(
+    _.flatMap((file) => {
+      const root = _.find((root) => file.indexOf(root) === 0, roots)
+
+      if (root === undefined) {
+        return []
+      }
+
+      return [{root, file}]
+    }),
+    _.groupBy(({root}) => root),
+    _.entries,
+    _.map(([root, files]) => {
+      return {
+        root,
+        files: _.flow( // remove elm-stuff files
+          _.filter(({file, root}) => file.indexOf('/elm-stuff') === -1),
+          _.map(({file}) => file)
+        )(files)
+      }
+    })
+  )(files)
+
+  return elmPackages
 }
 
 async function compileFile (workingDir, file) {
-  const filePath = path.join(workingDir, file)
-  const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${filePath}`)).split(
+  const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${file}`)).split(
     '\n'
   )
   const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical {_package = Name {_user = "(.*)", _project = "(.*)"}, _module = "(.*)"}/m
@@ -280,7 +340,7 @@ async function compileFile (workingDir, file) {
 }
 
 async function execWithDefaultErrorHandler (cmd) {
-  let {stdout, stderr} = await exec(cmd, {maxBuffer: 1024 * 1000})
+  let {stdout, stderr} = await exec(cmd, {maxBuffer: 1024 * 10000})
 
   if (stderr) {
     throw new Error(stderr)
