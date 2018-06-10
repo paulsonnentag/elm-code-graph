@@ -10,30 +10,14 @@ const session = driver.session()
 const PAGE_SIZE = 10
 ;(async () => {
   try {
-    let currentPage = 1
+    let currentPage = (await fs.readJSON('config.json')).currentPage
     let totalResults = Infinity
-
-    try {
-      await loadRepo({
-        stars: 10,
-        owner: 'wende',
-        name: 'elchemy',
-        lastUpdated: 'timestamp',
-        license: 'mit'
-      })
-    } catch (err) {
-      console.error('Failed import, Unexpected Error:', err)
-    }
-
-    process.exit()
 
     await createConstraints()
 
     do {
       const response = await axios.get(
-        `https://api.github.com/search/repositories?q=language:elm&per_page=${PAGE_SIZE}&page=${
-          currentPage
-        }`
+        `https://api.github.com/search/repositories?q=language:elm&per_page=${PAGE_SIZE}&page=${currentPage}`
       )
       const repos = response.data.items
 
@@ -49,12 +33,15 @@ const PAGE_SIZE = 10
             owner: repo.owner.login === 'elm' ? 'elm-lang' : repo.owner.login,
             name: repo.name,
             lastUpdated: repo.updated_at,
-            license: repo.license.key
+            license: repo.license ? repo.license.key : 'unknown'
           })
         } catch (err) {
           console.error('Failed import, Unexpected Error:', err)
         }
       }
+
+      await fs.writeJSON('config.json', {currentPage: currentPage + 1})
+      console.log('nextPage')
     } while ((currentPage - 1) * PAGE_SIZE < totalResults)
   } catch (err) {
     console.error(err)
@@ -75,7 +62,7 @@ async function createConstraints () {
 async function loadRepo (repo) {
   const {owner, name} = repo
   const timestamp = Date.now()
-  console.log(`${owner}/${name} start import`)
+  console.log(`===== ${owner}/${name} start import ====`)
 
   let references = []
 
@@ -159,7 +146,7 @@ async function addReferencesToGraph (references) {
             MATCH 
               (repo:Repo { id: $repo }) 
             MERGE 
-              (repo)-[:HAS_FILE]->(file:File { id: $file, ${module ? ' module: $repo + "/" + $module' : ''}, name: $name  })
+              (repo)-[:HAS_FILE]->(file:File { id: $file, ${module ? ' module: $repo + "/" + $module, ' : ''} name: $name  })
           `,
                 {
                   repo,

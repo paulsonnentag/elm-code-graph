@@ -296,7 +296,7 @@ async function compileFile (workingDir, file) {
   const lines = (await execWithDefaultErrorHandler(`lib/make.sh ${workingDir} ${file}`)).split(
     '\n'
   )
-  const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical {_package = Name {_user = "(.*)", _project = "(.*)"}, _module = "(.*)"}/m
+  const VALUE_REGEX = /External value [(`](.*)[`)] exists!!Canonical {_package = Name {_user = "(.*)", _project = "(.*)"}, _module =\s"(.*)"}/m
 
   return _.flow(
     _.flatMap(line => {
@@ -311,10 +311,11 @@ async function compileFile (workingDir, file) {
         return null
       }
 
-      const match = message.overview.replace('\n', ' ').match(VALUE_REGEX)
+      const normalizedMessage = message.overview.replace('\n', ' ')
+      const match = normalizedMessage.match(VALUE_REGEX)
 
       if (!match) {
-        console.warn(`couldn't parse message: "${message.overview}"`)
+        console.warn(`couldn't parse message: "${normalizedMessage}"`)
         return null
       }
 
