@@ -24,7 +24,7 @@ async function importRepo (context) {
 
   const rawReferences = await getAllReferences(context)
 
-  return Promise.all(
+  const result = await Promise.all(
     _.map(async reference => {
       const fileAbsPath = reference.file.split(REPO_DIR)[1].slice(1)
       const fileRelPath = reference.file.split(`${owner}/${name}`)[1].slice(1)
@@ -34,7 +34,7 @@ async function importRepo (context) {
       const endLine = reference.region.end.line
       const lineSelector = startLine === endLine ? `L${startLine}` : `L${startLine}:${endLine}`
       const normalizedOwner = owner === 'elm-lang' ? 'elm' : owner // Fix because elm repo is listed as elm-lang in dependencies
-      const url = `https://github.com/${normalizedOwner}/${name}/blob/${latestCommit.hash}${fileRelPath}#${lineSelector}`
+      const url = `https://github.com/${normalizedOwner}/${name}/blob/${latestCommit.hash}/${fileRelPath}#${lineSelector}`
 
       return {
         symbol: reference.symbol,
@@ -53,8 +53,11 @@ async function importRepo (context) {
           module: reference.module
         }
       }
-    }, rawReferences)
-  )
+    }, rawReferences))
+
+  await fs.emptyDir(path.join(__dirname, REPO_DIR, owner, name))
+
+  return result
 }
 
 async function fetchRepo ({owner, name}) {
@@ -173,7 +176,7 @@ async function getFileOfModule ({workingDir, owner, name, module, version}) {
     return
   }
 
-  throw new ImporterError(`Couldn't find file of module ${modulePath}`)
+  console.log(`Couldn't find file of module ${modulePath}`)
 }
 
 async function getAllReferences ({owner, name}) {
@@ -229,13 +232,15 @@ async function getReferences ({owner, name, workingDir, files}) {
 
   return _.flow(
     _.map(async reference => {
+      const version = dependencies[`${reference.user}/${reference.project}`]
+
       const moduleFile =
         await getFileOfModule({
           workingDir,
           owner: reference.user,
           name: reference.project,
           module: reference.module,
-          version: dependencies[`${reference.user}/${reference.project}`]
+          version
         })
 
       if (!moduleFile) {
@@ -245,6 +250,7 @@ async function getReferences ({owner, name, workingDir, files}) {
       return [{
         ...reference,
         moduleFile,
+        version,
         file: !reference.file.startsWith('/') ? `/${reference.file}` : path.join(workingDir, reference.file)
       }]
     }),
