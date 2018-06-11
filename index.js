@@ -115,7 +115,7 @@ async function addRepoMetaDataToGraph ({owner, stars, lastUpdated, license, name
 }
 
 async function addReferencesToGraph (references) {
-  // ensure referenced projects, modules and symbols exist
+  // ensure referenced repos, files and symbols exist
   await Promise.all(
     _.flow(
       _.flatMap(({referer, referred, symbol}) => [
@@ -146,7 +146,7 @@ async function addReferencesToGraph (references) {
             MATCH 
               (repo:Repo { id: $repo }) 
             MERGE 
-              (repo)-[:HAS_FILE]->(file:File { id: $file, ${module ? ' module: $repo + "/" + $module, ' : ''} name: $name  })
+              (repo)-[:HAS_FILE]->(file:File { id: $file, ${module ? ' module: $repo + "/" + $module, ' : ''} name: $name })
           `,
                 {
                   repo,
@@ -187,21 +187,27 @@ async function addReferencesToGraph (references) {
 
   // create reference edges
   await Promise.all(
-    _.map(async ({referer, referred, symbol, url, version}) => {
+    _.map(async ({referer, referred, symbol, url, version, region}) => {
       await session.run(`
-        MATCH 
+        MATCH
           (file:File { id: $fileId }),
-          (symbol:Symbol { id: $symbolId }) 
-        MERGE 
-          (file)-[:REFERENCES_SYMBOL { url: $url ${version ? ', version: $version' : ''} }]->(symbol)
+          (symbol:Symbol { id: $symbolId })
+        MERGE
+          (file)-[:REFERENCES_SYMBOL {
+            url: $url
+            ${version ? ', version: $version' : ''},
+            regionStart: $regionStart,
+            regionEnd: $regionEnd
+          }]->(symbol)
       `,
       {
         symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
         fileId: referer.file,
         url,
-        version: version || null
-      }
-      )
+        version: version || null,
+        regionStart: `${region.start.line}:${region.start.column}`,
+        regionEnd: `${region.end.line}:${region.end.column}`
+      })
     }, references)
   )
 }

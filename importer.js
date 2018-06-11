@@ -219,12 +219,7 @@ async function getReferences ({owner, name, workingDir, files}) {
 
       console.log(`compile ${currentFileName}: success`)
     } catch (e) {
-      console.warn(`compile ${currentFileName}: failed`)
-      if (currentFileName.startsWith('/tests/') || currentFileName.startsWith('/test/')) {
-        console.log('fine is test')
-      } else {
-        console.log(`\n${e}\n`)
-      }
+      console.warn(`compile ${currentFileName}: failed \n${e}\n`)
     }
 
     queue = queue.filter(file => !resolvedFiles[file])
