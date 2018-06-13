@@ -1,54 +1,47 @@
 const _ = require('lodash/fp')
 const {importRepo, ImporterError} = require('./importer')
 const fs = require('fs-extra')
-const axios = require('axios')
+const path = require('path')
 const neo4j = require('neo4j-driver').v1
+const {getGithubRepo} = require('./github-api')
+const Sema = require('async-sema')
 
 const driver = neo4j.driver('bolt://localhost', neo4j.auth.basic('neo4j', 'password'))
 const session = driver.session()
 
-const PAGE_SIZE = 10
+const PARALLEL_WORKERS = 5
+
+const s = new Sema(PARALLEL_WORKERS, { capactiy: 10000 })
+
 ;(async () => {
   try {
-    let currentPage = (await fs.readJSON('config.json')).currentPage
-    let totalResults = Infinity
-
     await createConstraints()
 
-    do {
-      const response = await axios.get(
-        `https://api.github.com/search/repositories?q=language:elm&per_page=${PAGE_SIZE}&page=${currentPage}`
-      )
-      const repos = response.data.items
-
-      totalResults = response.data.total_count
-      currentPage++
-
-      for (let i = 0; i < repos.length; i++) {
-        const repo = repos[i]
-
-        try {
-          await loadRepo({
-            stars: repo.stargazers_count,
-            owner: repo.owner.login === 'elm' ? 'elm-lang' : repo.owner.login,
-            name: repo.name,
-            lastUpdated: repo.updated_at,
-            license: repo.license ? repo.license.key : 'unknown'
-          })
-        } catch (err) {
-          console.error('Failed import, Unexpected Error:', err)
-        }
+    await Promise.all(_.map(async fullName => {
+      await s.acquire()
+      try {
+        await loadRepo(fullName)
+      } catch (err) {
+        console.error('Failed import, Unexpected Error:', err)
       }
 
-      await fs.writeJSON('config.json', {currentPage: currentPage + 1})
-      console.log('nextPage')
-    } while ((currentPage - 1) * PAGE_SIZE < totalResults)
+      await markRepoAsImported(fullName)
+      s.release()
+    }, await getUncompiledRepos()))
   } catch (err) {
     console.error(err)
   }
 
-  process.exit()
+  session.close()
+  driver.close()
 })()
+
+async function getUncompiledRepos () {
+  return session.run('MATCH (repo:Repo {imported: false}) RETURN repo')
+    .then(({records}) => (
+      _.map(record => record.toObject().repo.properties.id, records)
+    ))
+}
 
 async function createConstraints () {
   await session.run('CREATE CONSTRAINT ON (repo:Repo) ASSERT repo.id IS UNIQUE')
@@ -59,8 +52,15 @@ async function createConstraints () {
   await session.run('CREATE CONSTRAINT ON (symbol:Symbol) ASSERT exists(symbol.id)')
 }
 
-async function loadRepo (repo) {
-  const {owner, name} = repo
+async function markRepoAsImported (fullName) {
+  return session.run('MATCH (repo:Repo { id: $id }) SET repo.imported = true', {
+    id: fullName
+  })
+}
+
+async function loadRepo (fullName) {
+  const repo = await getGithubRepo(fullName)
+  const {name, owner} = repo
   const timestamp = Date.now()
   console.log(`===== ${owner}/${name} start import ====`)
 
@@ -84,10 +84,10 @@ async function loadRepo (repo) {
 
   const duration = Math.round((Date.now() - timestamp) / 1000)
 
+  await fs.emptyDir(path.join(__dirname, '_repos', owner, name))
+
   console.log(
-    `${owner}/${name} successfully imported ${references.length} reference(s) in ${
-      duration
-    } second(s)`
+    `${owner}/${name} successfully imported ${references.length} reference(s) in ${duration} second(s)`
   )
 }
 
@@ -200,14 +200,14 @@ async function addReferencesToGraph (references) {
             regionEnd: $regionEnd
           }]->(symbol)
       `,
-      {
-        symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
-        fileId: referer.file,
-        url,
-        version: version || null,
-        regionStart: `${region.start.line}:${region.start.column}`,
-        regionEnd: `${region.end.line}:${region.end.column}`
-      })
+        {
+          symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
+          fileId: referer.file,
+          url,
+          version: version || null,
+          regionStart: `${region.start.line}:${region.start.column}`,
+          regionEnd: `${region.end.line}:${region.end.column}`
+        })
     }, references)
   )
 }

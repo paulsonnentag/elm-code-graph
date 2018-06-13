@@ -55,8 +55,6 @@ async function importRepo (context) {
       }
     }, rawReferences))
 
-  await fs.emptyDir(path.join(__dirname, REPO_DIR, owner, name))
-
   return result
 }
 
@@ -312,7 +310,7 @@ async function compileFile (workingDir, file) {
         return null
       }
 
-      const normalizedMessage = message.overview.replace('\n', ' ')
+      const normalizedMessage = message.overview.replace(new RegExp('\n', 'g'), ' ')
       const match = normalizedMessage.match(VALUE_REGEX)
 
       if (!match) {

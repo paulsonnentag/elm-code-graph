@@ -10,6 +10,7 @@
   "author": "Paul Sonnentag <Paul.Sonnentag@gmail.com>",
   "license": "MIT",
   "dependencies": {
+    "async-sema": "^2.1.0",
     "axios": "^0.18.0",
     "compare-versions": "^3.1.0",
     "fs-extra": "^4.0.2",
