@@ -10,10 +10,22 @@ function getGithubRepo (fullName) {
       lastUpdated: repo.updated_at,
       license: repo.license ? repo.license.key : 'unknown'
     }))
+    .catch((err) => {
+      if (err.response.status === 404) {
+        return null
+      }
+
+      return Promise.reject(err)
+    })
 }
 
-function searchElmRepos ({pageSize, page}) {
-  return throttleGet(`https://api.github.com/search/repositories`, {q: 'language:elm', page, pageSize})
+function searchElmRepos ({pageSize, page, lastCommitted}) {
+  return throttleGet(`https://api.github.com/search/repositories`, {
+    q: `language:elm${lastCommitted ? ` pushed:<=${lastCommitted}` : ''}`,
+    page,
+    pageSize,
+    sort: 'updated'
+  })
     .then(data => ({
       repos: data.items,
       total: data.total_count
@@ -23,20 +35,26 @@ function searchElmRepos ({pageSize, page}) {
 async function throttleGet (url, params = {}) {
   return axios.get(url, {params: {...secret, ...params}})
     .catch(async (err) => {
-      if (err.response.status === 422) {
-        var waitTime = parseInt(err.response.headers['X-RateLimit-Reset'], 10) + 500 - Date.now()
+      if (err.response.status === 422 || err.response.status === 403) {
+        var waitTime = (parseInt(err.response.headers['x-ratelimit-reset'], 10) * 1000) + 500 - Date.now()
 
         if (waitTime > 0) {
           console.log(`sleep ${waitTime / 1000} second(s)`)
           await sleep(waitTime)
         }
 
-        return throttleGet(url)
+        return throttleGet(url, params)
       }
 
       return Promise.reject(err)
     })
-    .then(({data}) => data)
+    .then((result) => {
+      if (result.data) {
+        return result.data
+      }
+
+      return result
+    })
 }
 
 async function sleep (ms) {

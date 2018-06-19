@@ -7,10 +7,6 @@ const path = require('path')
 ;(async () => {
   let allRepos = []
 
-  console.log('big query:')
-  const bigQueryRepos = await getBigQueryRepos()
-  allRepos = mergeRepos(allRepos, bigQueryRepos)
-
   console.log('elm packages:')
   const elmPackageRepos = await getElmPackageRepos()
   allRepos = mergeRepos(allRepos, elmPackageRepos)
@@ -32,32 +28,41 @@ function mergeRepos (allRepos, newRepos) {
   return mergedRepos
 }
 
-async function getBigQueryRepos () {
-  return _.map(repo => repo['repo_name'], await fs.readJSON('./data/big-query-result.json'))
-}
-
 async function getElmPackageRepos () {
   return _.map(({name}) => name, (await axios.get('http://package.elm-lang.org/all-packages')).data)
 }
 
 async function getGithubSearchRepos () {
   const PAGE_SIZE = 100
-  const MAX_RESULTS = 1000
+  const MAX_PAGE = 10
 
-  let currentPage = 1
   let searchRepos = []
-  let totalResults
+  let currentPage = 1
+  let lastCommitted
 
-  do {
-    const { total, repos } = await searchElmRepos({ pageSize: PAGE_SIZE, page: currentPage })
-    totalResults = total
+  while (true) {
+    console.log(`page ${currentPage}, date: ${lastCommitted}`)
 
-    console.log(`import page ${currentPage}`)
+    const { total, repos } = await searchElmRepos({ pageSize: PAGE_SIZE, page: currentPage, lastCommitted })
 
-    currentPage++
+    const newRepos = _.map(repo => repo['full_name'], repos)
 
-    searchRepos = searchRepos.concat(_.map(repo => repo['full_name'], repos))
-  } while ((currentPage - 1) * PAGE_SIZE < Math.min(MAX_RESULTS, totalResults))
+    console.log(`total: ${total}, repos: ${newRepos.slice(0, 5).join(',')}`)
+
+    searchRepos = searchRepos.concat(newRepos)
+
+    if (currentPage * PAGE_SIZE < total) {
+      if (currentPage < MAX_PAGE) {
+        currentPage++
+      } else {
+        currentPage = 1
+        lastCommitted = _.last(repos).pushed_at.slice(0, 10)
+      }
+      continue
+    }
+
+    break
+  }
 
   return searchRepos
 }

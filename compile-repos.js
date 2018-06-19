@@ -200,14 +200,14 @@ async function addReferencesToGraph (references) {
             regionEnd: $regionEnd
           }]->(symbol)
       `,
-        {
-          symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
-          fileId: referer.file,
-          url,
-          version: version || null,
-          regionStart: `${region.start.line}:${region.start.column}`,
-          regionEnd: `${region.end.line}:${region.end.column}`
-        })
+      {
+        symbolId: `${referred.file.slice(0, -4)}.${symbol}`,
+        fileId: referer.file,
+        url,
+        version: version || null,
+        regionStart: `${region.start.line}:${region.start.column}`,
+        regionEnd: `${region.end.line}:${region.end.column}`
+      })
     }, references)
   )
 }

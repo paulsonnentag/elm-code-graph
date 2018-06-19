@@ -7,7 +7,12 @@ const session = driver.session()
 ;(async () => {
   const repos = require(path.join(__dirname, 'data/repos.json'))
   const inserts = await Promise.all(_.map(repo => {
-    return session.run('MERGE (repo:Repo { id: $repo, imported: false })', {repo})
+    return session.run(`
+      MERGE 
+        (repo:Repo { id: $repo })
+      ON CREATE SET 
+        repo.imported = false 
+    `, {repo})
   }, repos))
 
   const nodeCount = _.reduce((sum, insert) => sum + insert.summary.counters._stats.nodesCreated, 0, inserts)
