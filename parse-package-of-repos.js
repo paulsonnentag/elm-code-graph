@@ -133,8 +133,8 @@ async function getHistoryOfRepo (fullName, packages) {
 
   return {
     dependencies,
-    firstCommitTimestamp: parseTimestamp(_.first(commits).date),
-    lastCommitTimestamp: parseTimestamp(_.last(commits).date)
+    firstCommitTimestamp: parseTimestamp(_.last(commits).date), // commits are in reverse chronological order
+    lastCommitTimestamp: parseTimestamp(_.first(commits).date)
   }
 }
 
