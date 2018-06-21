@@ -1,0 +1,21 @@
+{
+  "name": "time-queries-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "standard",
+    "format": "prandard '*.js'"
+  },
+  "author": "Paul Sonnentag <Paul.Sonnentag@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "lodash": "^4.17.10",
+    "luxon": "^1.2.1",
+    "neo4j-driver": "^1.5.0"
+  },
+  "devDependencies": {
+    "prandard": "^1.0.2",
+    "standard": "^11.0.1"
+  }
+}
