@@ -1,7 +1,7 @@
 module Main exposing (..)
 
 import Html exposing (..)
-import Html.Attributes exposing (class, cols, rows, value, disabled)
+import Html.Attributes exposing (class, cols, rows, value, disabled, style)
 import Html.Events exposing (onInput, onClick)
 import LineChart
 import LineChart.Dots as Dots
@@ -38,12 +38,22 @@ type alias GraphData =
 
 init : ( Model, Cmd Msg )
 init =
-    ( { loading = False
-      , query = "MATCH (r:Repo) WHERE r.lastUpdated <= $timestamp AND r.created >= $timestamp RETURN count(r) as value, 'activeRepos' as label"
-      , result = Nothing
-      }
-    , Cmd.none
-    )
+    let
+        query =
+            "MATCH (r:Repo) \nWHERE r.lastUpdated <= $timestamp AND r.created >= $timestamp \nRETURN count(r) as value, 'activeRepos' as label"
+
+        url =
+            "http://localhost:3000?q=" ++ (Http.encodeUri query)
+
+        request =
+            Http.get url decodeData
+    in
+        ( { loading = False
+          , query = query
+          , result = Nothing
+          }
+        , Http.send LoadResult request
+        )
 
 
 decodeData : Decode.Decoder GraphData
@@ -85,24 +95,86 @@ update msg model =
 -- VIEW
 
 
+boxSizingStyle =
+    [ ( "box-sizing", "border-box" ) ]
+
+
+appStyle =
+    boxSizingStyle
+        ++ [ ( "background-color", "rgb(210,213,218)" )
+           , ( "height", "100%" )
+           , ( "width", "100%" )
+           , ( "padding", "20px" )
+           ]
+
+
+queryBoxStyle =
+    boxSizingStyle
+        ++ [ ( "padding", "12px" )
+           , ( "margin-bottom", "10px" )
+           , ( "background", "rgb(239, 239, 244)" )
+           , ( "box-shadow", "rgba(0, 0, 0, 0.1) 0px 1px 4px" )
+           , ( "display", "flex" )
+           , ( "flex-direction", "row" )
+           , ( "align-items", "center" )
+           ]
+
+
+textAreaStyle =
+    boxSizingStyle
+        ++ [ ( "border-radius", "5px" )
+           , ( "border", "0" )
+           , ( "outline", "0" )
+           , ( "width", "100%" )
+           ]
+
+
+buttonStyle =
+    boxSizingStyle
+        ++ [ ( "width", "50px" )
+           , ( "height", "50px" )
+           , ( "margin-left", "10px" )
+           , ( "background", "transparent" )
+           , ( "border", "0" )
+           , ( "background-image", "url('assets/run.svg')" )
+           , ( "background-size", "contain" )
+           , ( "background-position", "center" )
+           , ( "background-repeat", "no-repeat" )
+           ]
+
+
+graphStyle =
+    boxSizingStyle
+        ++ [ ( "box-shadow", "rgba(0, 0, 0, 0.1) 0px 1px 4px" )
+           , ( "background", "white" )
+           ]
+
+
+errorStyle =
+    boxSizingStyle ++ [ ( "padding", "10px" ) ]
+
+
 view : Model -> Html Msg
 view { loading, query, result } =
-    div []
-        [ textarea
-            [ cols 100
-            , rows 5
-            , value query
-            , onInput UpdateQuery
-            , disabled loading
+    div [ style appStyle ]
+        [ div
+            [ style queryBoxStyle ]
+            [ textarea
+                [ rows 4
+                , value query
+                , onInput UpdateQuery
+                , disabled loading
+                , style textAreaStyle
+                ]
+                []
+            , button
+                [ onClick RunQuery
+                , disabled loading
+                , style buttonStyle
+                ]
+                [ text "" ]
             ]
-            []
-        , br [] []
-        , button
-            [ onClick RunQuery
-            , disabled loading
-            ]
-            [ text "run" ]
-        , div []
+        , div [ style graphStyle ]
             [ case result of
                 Nothing ->
                     text ""
@@ -113,7 +185,8 @@ view { loading, query, result } =
                             chart sequences
 
                         Err message ->
-                            pre [] [ text ("Error!!" ++ (toString message)) ]
+                            pre [ style errorStyle ]
+                                [ text ("Error: " ++ (toString message)) ]
             ]
         ]
 
