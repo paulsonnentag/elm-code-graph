@@ -22,6 +22,8 @@ import Color
 import Dict exposing (Dict)
 import Http
 import Json.Decode as Decode
+import Window
+import Task
 
 
 main : Program Never Model Msg
@@ -43,6 +45,7 @@ type alias Model =
     , query : String
     , isStacked : Bool
     , result : Maybe (Result Http.Error GraphData)
+    , width : Int
     }
 
 
@@ -60,8 +63,12 @@ init =
           , query = query
           , result = Nothing
           , isStacked = False
+          , width = 500
           }
-        , Http.send LoadResult (queryRequest query)
+        , Cmd.batch
+            [ Http.send LoadResult (queryRequest query)
+            , Task.perform Resize Window.size
+            ]
         )
 
 
@@ -84,6 +91,7 @@ type Msg
     | UpdateQuery String
     | RunQuery
     | ToggleIsStacked
+    | Resize Window.Size
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -100,6 +108,9 @@ update msg model =
 
         ToggleIsStacked ->
             ( { model | isStacked = not model.isStacked }, Cmd.none )
+
+        Resize window ->
+            ( { model | width = window.width - 60 }, Cmd.none )
 
 
 
@@ -177,7 +188,7 @@ errorStyle =
 
 
 view : Model -> Html Msg
-view { loading, query, result, isStacked } =
+view { loading, query, result, isStacked, width } =
     div [ style appStyle ]
         [ div
             [ style queryBoxStyle ]
@@ -215,7 +226,7 @@ view { loading, query, result, isStacked } =
                                         []
                                     , text "stack lines"
                                     ]
-                                , chart isStacked sequences
+                                , chart width isStacked sequences
                                 ]
 
                         Err message ->
@@ -225,10 +236,10 @@ view { loading, query, result, isStacked } =
         ]
 
 
-chart : Bool -> GraphData -> Html.Html msg
-chart isStacked graph =
+chart : Int -> Bool -> GraphData -> Html.Html msg
+chart width isStacked graph =
     LineChart.viewCustom
-        { x = Axis.default 700 "time" (\( key, value ) -> toFloat key)
+        { x = Axis.default width "time" (\( key, value ) -> toFloat key)
         , y = Axis.default 450 "" (\( key, value ) -> value)
         , container = Container.styled "line-chart-1" [ ( "font-family", "monospace" ) ]
         , interpolation = Interpolation.monotone
@@ -303,4 +314,4 @@ graphSequenceToLine index ( label, values ) =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    Window.resizes Resize
