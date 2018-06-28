@@ -87,10 +87,16 @@ update msg model =
 -- VIEW
 
 
+type alias StyleProps =
+    List ( String, String )
+
+
+boxSizingStyle : StyleProps
 boxSizingStyle =
     [ ( "box-sizing", "border-box" ) ]
 
 
+appStyle : StyleProps
 appStyle =
     boxSizingStyle
         ++ [ ( "background-color", "rgb(210,213,218)" )
@@ -100,6 +106,7 @@ appStyle =
            ]
 
 
+queryBoxStyle : StyleProps
 queryBoxStyle =
     boxSizingStyle
         ++ [ ( "padding", "12px" )
@@ -112,6 +119,7 @@ queryBoxStyle =
            ]
 
 
+textAreaStyle : StyleProps
 textAreaStyle =
     boxSizingStyle
         ++ [ ( "border-radius", "5px" )
@@ -121,6 +129,7 @@ textAreaStyle =
            ]
 
 
+buttonStyle : StyleProps
 buttonStyle =
     boxSizingStyle
         ++ [ ( "width", "50px" )
@@ -135,6 +144,7 @@ buttonStyle =
            ]
 
 
+graphStyle : StyleProps
 graphStyle =
     boxSizingStyle
         ++ [ ( "box-shadow", "rgba(0, 0, 0, 0.1) 0px 1px 4px" )
@@ -142,6 +152,7 @@ graphStyle =
            ]
 
 
+errorStyle : StyleProps
 errorStyle =
     boxSizingStyle ++ [ ( "padding", "10px" ) ]
 
