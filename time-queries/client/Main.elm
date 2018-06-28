@@ -1,10 +1,23 @@
 module Main exposing (..)
 
 import Html exposing (..)
-import Html.Attributes exposing (class, cols, rows, value, disabled, style)
+import Html.Attributes exposing (class, cols, rows, value, disabled, style, checked, type_)
 import Html.Events exposing (onInput, onClick)
 import LineChart
 import LineChart.Dots as Dots
+import LineChart as LineChart
+import LineChart.Junk as Junk
+import LineChart.Dots as Dots
+import LineChart.Container as Container
+import LineChart.Interpolation as Interpolation
+import LineChart.Axis.Intersection as Intersection
+import LineChart.Axis as Axis
+import LineChart.Legends as Legends
+import LineChart.Line as Line
+import LineChart.Events as Events
+import LineChart.Grid as Grid
+import LineChart.Legends as Legends
+import LineChart.Area as Area
 import Color
 import Dict exposing (Dict)
 import Http
@@ -28,6 +41,7 @@ main =
 type alias Model =
     { loading : Bool
     , query : String
+    , isStacked : Bool
     , result : Maybe (Result Http.Error GraphData)
     }
 
@@ -45,6 +59,7 @@ init =
         ( { loading = False
           , query = query
           , result = Nothing
+          , isStacked = False
           }
         , Http.send LoadResult (queryRequest query)
         )
@@ -68,6 +83,7 @@ type Msg
     = LoadResult (Result Http.Error GraphData)
     | UpdateQuery String
     | RunQuery
+    | ToggleIsStacked
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -81,6 +97,9 @@ update msg model =
 
         RunQuery ->
             ( { model | loading = True, result = Nothing }, Http.send LoadResult (queryRequest model.query) )
+
+        ToggleIsStacked ->
+            ( { model | isStacked = not model.isStacked }, Cmd.none )
 
 
 
@@ -158,7 +177,7 @@ errorStyle =
 
 
 view : Model -> Html Msg
-view { loading, query, result } =
+view { loading, query, result, isStacked } =
     div [ style appStyle ]
         [ div
             [ style queryBoxStyle ]
@@ -185,7 +204,19 @@ view { loading, query, result } =
                 Just result ->
                     case result of
                         Ok sequences ->
-                            chart sequences
+                            div
+                                []
+                                [ label []
+                                    [ input
+                                        [ type_ "checkbox"
+                                        , onClick ToggleIsStacked
+                                        , checked isStacked
+                                        ]
+                                        []
+                                    , text "stack lines"
+                                    ]
+                                , chart isStacked sequences
+                                ]
 
                         Err message ->
                             pre [ style errorStyle ]
@@ -194,20 +225,76 @@ view { loading, query, result } =
         ]
 
 
-chart : GraphData -> Html.Html msg
-chart graph =
-    LineChart.view
-        (\( key, value ) -> toFloat key)
-        (\( key, value ) -> value)
+chart : Bool -> GraphData -> Html.Html msg
+chart isStacked graph =
+    LineChart.viewCustom
+        { x = Axis.default 700 "time" (\( key, value ) -> toFloat key)
+        , y = Axis.default 450 "" (\( key, value ) -> value)
+        , container = Container.styled "line-chart-1" [ ( "font-family", "monospace" ) ]
+        , interpolation = Interpolation.monotone
+        , intersection = Intersection.default
+        , legends = Legends.default
+        , events = Events.default
+        , junk = Junk.default
+        , grid = Grid.default
+        , area =
+            if isStacked then
+                Area.stacked 0.5
+            else
+                Area.default
+        , line = Line.default
+        , dots = Dots.custom (Dots.empty 5 1)
+        }
         (graph
-            |> Dict.map graphSequenceToLine
-            |> Dict.values
+            |> Dict.toList
+            |> List.indexedMap graphSequenceToLine
         )
 
 
-graphSequenceToLine : String -> List Float -> LineChart.Series ( Int, Float )
-graphSequenceToLine label values =
-    LineChart.line Color.red Dots.none label (List.indexedMap (,) values)
+graphSequenceToLine : Int -> ( String, List Float ) -> LineChart.Series ( Int, Float )
+graphSequenceToLine index ( label, values ) =
+    let
+        color =
+            case index % 5 of
+                0 ->
+                    Color.red
+
+                1 ->
+                    Color.green
+
+                2 ->
+                    Color.blue
+
+                3 ->
+                    Color.yellow
+
+                _ ->
+                    Color.orange
+
+        dots =
+            case (index // 5) % 7 of
+                0 ->
+                    Dots.none
+
+                1 ->
+                    Dots.circle
+
+                2 ->
+                    Dots.triangle
+
+                3 ->
+                    Dots.square
+
+                4 ->
+                    Dots.diamond
+
+                5 ->
+                    Dots.plus
+
+                _ ->
+                    Dots.cross
+    in
+        LineChart.line color Dots.none label (List.indexedMap (,) values)
 
 
 
