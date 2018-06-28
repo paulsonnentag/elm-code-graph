@@ -41,19 +41,18 @@ init =
     let
         query =
             "MATCH (r:Repo) \nWHERE r.lastUpdated <= $timestamp AND r.created >= $timestamp \nRETURN count(r) as value, 'activeRepos' as label"
-
-        url =
-            "http://localhost:3000?q=" ++ (Http.encodeUri query)
-
-        request =
-            Http.get url decodeData
     in
         ( { loading = False
           , query = query
           , result = Nothing
           }
-        , Http.send LoadResult request
+        , Http.send LoadResult (queryRequest query)
         )
+
+
+queryRequest : String -> Http.Request GraphData
+queryRequest query =
+    Http.get ("http://localhost:3000?q=" ++ (Http.encodeUri query)) decodeData
 
 
 decodeData : Decode.Decoder GraphData
@@ -81,14 +80,7 @@ update msg model =
             ( { model | query = query }, Cmd.none )
 
         RunQuery ->
-            let
-                url =
-                    "http://localhost:3000?q=" ++ model.query
-
-                request =
-                    Http.get url decodeData
-            in
-                ( { model | loading = True, result = Nothing }, Http.send LoadResult request )
+            ( { model | loading = True, result = Nothing }, Http.send LoadResult (queryRequest model.query) )
 
 
 
